@@ -77,18 +77,6 @@ python -m tools.benchmark --summary
 
 For the `--workers` runs, the label is just what you tell it, so make sure the right number of workers is actually running.
 
-## Benchmark results
-
-4096x4096 image, bilateral denoise, 64 tiles, 3 runs each, everything on one laptop:
-
-| Setup | Mean time |
-|---|---|
-| Single process, 1 thread, no Kafka | 4.32 s |
-| 1 worker | 27.64 s |
-| 2 workers | 22.37 s |
-
-Going from 1 to 2 workers gave about a 1.24x speedup, and tiles were split evenly (32 each). But the whole pipeline was slower than just running the filter in one process. On a single machine the splitting (around 7 s) and stitching (around 4 s) in the master run serially, tiles are PNG encoded and decoded on every hop, and the master, workers and Docker all share the same CPU. I haven't profiled this properly, so that is my best explanation rather than a measured one. A real gain would need heavier per-tile work and workers on separate machines.
-
 ## Project layout
 
 ```
@@ -97,6 +85,7 @@ worker/    Kafka consumer, OpenCV processing, heartbeats
 common/    config, Kafka helpers, image operations
 scripts/   topic creation
 tools/     benchmark, tiling check, sample image generator
+batch/     all the .bat files to create setup and run workers
 ```
 
 ## Configuration
@@ -104,10 +93,3 @@ tools/     benchmark, tiling check, sample image generator
 Environment variables: `KAFKA_BOOTSTRAP` (default `localhost:9092`), `TILE_SIZE` (minimum 512), `WORKER_ARTIFICIAL_DELAY_MS`, `WORKER_CV_THREADS` (default 1).
 
 To run workers on other machines, point `KAFKA_BOOTSTRAP` at the broker's IP and change `KAFKA_ADVERTISED_LISTENERS` in `docker-compose.yml` to the same IP.
-
-## Known limitations
-
-- Single Kafka broker, replication factor 1, so no broker fault tolerance.
-- Only two workers are tested. The partition count is fixed at 2, so extra workers would sit idle unless you add partitions.
-- The master keeps no queue of its own. If it is down, results wait in Kafka and get processed when it restarts.
-- No authentication on the web page.

@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Distributed Image Pipeline</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#0f1420; --card:#171e2e; --line:#2a3550; --text:#e6ebf5; --mut:#8b97b3;
+          --ok:#3ddc97; --bad:#ff5d6c; --warn:#ffb84d; --acc:#5b8cff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:Segoe UI,system-ui,sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:14px 22px;
+           border-bottom:1px solid var(--line); }
+  header h1 { font-size:18px; margin:0 18px 0 0; }
+  .pill { padding:5px 12px; border-radius:99px; background:var(--card); border:1px solid var(--line); font-size:13px; }
+  .pill b { color:var(--acc); }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; background:var(--bad); }
+  .dot.on { background:var(--ok); }
+  main { display:grid; grid-template-columns:minmax(320px,420px) 1fr; gap:18px; padding:18px 22px; }
+  @media (max-width:950px){ main { grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:18px; }
+  .card h2 { margin:0 0 12px; font-size:15px; color:var(--mut); text-transform:uppercase; letter-spacing:.05em; }
+  label { font-size:13px; color:var(--mut); display:block; margin:10px 0 4px; }
+  input[type=file], select { width:100%; padding:8px; background:var(--bg); color:var(--text);
+          border:1px solid var(--line); border-radius:8px; }
+  button { margin-top:14px; width:100%; padding:10px; border:0; border-radius:8px; background:var(--acc);
+           color:#fff; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:wait; }
+  .err { color:var(--bad); font-size:13px; margin-top:10px; min-height:18px; }
+  .job { padding:10px; border:1px solid var(--line); border-radius:10px; margin-bottom:8px; cursor:pointer; }
+  .job.sel { border-color:var(--acc); background:#1c2740; }
+  .job .row { display:flex; justify-content:space-between; font-size:13px; }
+  .bar { height:7px; background:var(--bg); border-radius:99px; margin-top:8px; overflow:hidden; }
+  .bar > div { height:100%; background:var(--acc); transition:width .3s; }
+  .bar.done > div { background:var(--ok); } .bar.failed > div { background:var(--bad); }
+  .tag { font-size:11px; padding:2px 8px; border-radius:99px; border:1px solid var(--line); color:var(--mut); }
+  .tag.done { color:var(--ok); border-color:var(--ok); } .tag.failed { color:var(--bad); border-color:var(--bad); }
+  .tag.processing, .tag.stitching { color:var(--warn); border-color:var(--warn); }
+  .workers { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:12px; }
+  .w { border:1px solid var(--line); border-radius:10px; padding:12px; font-size:13px; }
+  .w.off { opacity:.55; border-color:var(--bad); }
+  .w h3 { margin:0 0 8px; font-size:15px; display:flex; justify-content:space-between; align-items:center; }
+  .w div.kv { display:flex; justify-content:space-between; padding:2px 0; color:var(--mut); }
+  .w div.kv span:last-child { color:var(--text); }
+  .grid { position:relative; width:100%; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--bg); }
+  .t { position:absolute; border:1px solid #0f1420; display:flex; align-items:center; justify-content:center;
+       font-size:11px; color:#0b1020; font-weight:600; }
+  .t.q { background:repeating-linear-gradient(45deg,#222b42,#222b42 6px,#27314b 6px,#27314b 12px); color:var(--mut); }
+  .imgs { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .imgs img { width:100%; border-radius:8px; border:1px solid var(--line); background:var(--bg); }
+  .imgs .cap { font-size:12px; color:var(--mut); margin-bottom:4px; }
+  .stats { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 12px; }
+  a.dl { color:var(--acc); font-size:13px; }
+  .empty { color:var(--mut); font-size:13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Distributed Image Pipeline</h1>
+  <span class="pill"><span id="kdot" class="dot"></span>Kafka <span id="kboot"></span></span>
+  <span class="pill">Active workers: <b id="aw">0</b></span>
+  <span class="pill">Jobs processing: <b id="jp">0</b></span>
+  <span class="pill">Jobs done: <b id="jd">0</b></span>
+  <span class="pill">Tiles processed (all time): <b id="tp">0</b></span>
+</header>
+<main>
+  <section>
+    <div class="card">
+      <h2>Upload image</h2>
+      <label>Image (min 1024 x 1024)</label>
+      <input type="file" id="file" accept="image/*">
+      <label>Operation</label>
+      <select id="op"></select>
+      <button id="go">Process</button>
+      <div class="err" id="err"></div>
+    </div>
+    <div class="card">
+      <h2>Jobs</h2>
+      <div id="jobs"><div class="empty">No jobs yet.</div></div>
+    </div>
+  </section>
+  <section>
+    <div class="card">
+      <h2>Workers (from heartbeats topic)</h2>
+      <div class="workers" id="workers"><div class="empty">No heartbeats received yet. Start a worker.</div></div>
+    </div>
+    <div class="card" id="detail" style="display:none">
+      <h2>Job <span id="djid"></span></h2>
+      <div class="stats" id="dstats"></div>
+      <div class="grid" id="tgrid"></div>
+      <div style="font-size:12px;color:var(--mut);margin:6px 0 14px">Tile colour = worker that processed it. Hatched = waiting in Kafka.</div>
+      <div class="imgs" id="dimgs"></div>
+    </div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const PALETTE = ['#5b8cff','#3ddc97','#ffb84d','#c084fc','#ff7aa8','#4dd4e6'];
+const colorMap = {};
+function colorFor(w){ if(!(w in colorMap)) colorMap[w] = PALETTE[Object.keys(colorMap).length % PALETTE.length]; return colorMap[w]; }
+let selected = null;
+
+fetch('/api/operations').then(r=>r.json()).then(ops=>{
+  $('op').innerHTML = Object.entries(ops).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
+});
+
+$('go').onclick = async () => {
+  const f = $('file').files[0];
+  $('err').textContent = '';
+  if(!f){ $('err').textContent = 'Choose an image first.'; return; }
+  const fd = new FormData(); fd.append('file', f); fd.append('operation', $('op').value);
+  $('go').disabled = true; $('go').textContent = 'Uploading & splitting...';
+  try {
+    const r = await fetch('/api/jobs', {method:'POST', body:fd});
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.detail || 'Upload failed');
+    selected = j.job_id;
+  } catch(e){ $('err').textContent = e.message; }
+  $('go').disabled = false; $('go').textContent = 'Process';
+  refresh();
+};
+
+function tag(s){ return `<span class="tag ${s}">${s}</span>`; }
+
+async function refresh(){
+  try {
+    const [st, ws, jobs] = await Promise.all([
+      fetch('/api/status').then(r=>r.json()), fetch('/api/workers').then(r=>r.json()),
+      fetch('/api/jobs').then(r=>r.json())]);
+    $('kdot').className = 'dot' + (st.kafka_ok ? ' on' : '');
+    $('kboot').textContent = st.kafka_ok ? 'connected' : 'NOT reachable';
+    $('aw').textContent = st.active_workers; $('jp').textContent = st.jobs_processing;
+    $('jd').textContent = st.jobs_done; $('tp').textContent = st.tiles_processed_total;
+
+    if(ws.length){
+      $('workers').innerHTML = ws.map(w => `
+        <div class="w ${w.online?'':'off'}" style="border-left:4px solid ${colorFor(w.worker_id)}">
+          <h3>${w.worker_id}
+            <span class="tag ${w.online?'done':'failed'}">${w.online ? w.status : 'OFFLINE'}</span></h3>
+          <div class="kv"><span>Kafka partitions</span><span>${w.online && w.partitions.length ? w.partitions.join(', ') : '-'}</span></div>
+          <div class="kv"><span>Current tile</span><span>${w.current_task || '-'}</span></div>
+          <div class="kv"><span>Tiles processed (session)</span><span>${w.tiles_processed}</span></div>
+          <div class="kv"><span>Avg tile time</span><span>${w.avg_tile_ms} ms</span></div>
+          <div class="kv"><span>CPU / RAM</span><span>${w.cpu_percent}% / ${w.mem_mb} MB</span></div>
+          <div class="kv"><span>Last heartbeat</span><span>${w.age_s}s ago</span></div>
+        </div>`).join('');
+    }
+
+    if(jobs.length){
+      if(!selected) selected = jobs[0].id;
+      $('jobs').innerHTML = jobs.map(j => {
+        const pct = Math.round(100 * j.tiles_done / j.tile_count);
+        return `<div class="job ${j.id===selected?'sel':''}" onclick="selected='${j.id}';refresh()">
+          <div class="row"><span><b>${j.id}</b> &middot; ${j.operation}</span>${tag(j.status)}</div>
+          <div class="row" style="color:var(--mut);margin-top:4px"><span>${j.width}x${j.height} &middot; ${j.tiles_done}/${j.tile_count} tiles</span><span>${j.elapsed_s}s</span></div>
+          <div class="bar ${j.status}"><div style="width:${pct}%"></div></div></div>`;
+      }).join('');
+    }
+    if(selected) await showJob(selected);
+  } catch(e){ $('kboot').textContent = 'master unreachable'; }
+}
+
+let shownImgsFor = null;
+async function showJob(id){
+  const r = await fetch('/api/jobs/' + id); if(!r.ok) return;
+  const j = await r.json();
+  $('detail').style.display = 'block'; $('djid').textContent = j.id + ' - ' + j.filename;
+  const perWorker = {};
+  j.tiles.forEach(t => { if(t.worker_id) perWorker[t.worker_id] = (perWorker[t.worker_id]||0)+1; });
+  const pw = Object.entries(perWorker).map(([w,n]) => `${w}: ${n}`).join(' | ') || '-';
+  $('dstats').innerHTML = [tag(j.status), `<span class="pill">Elapsed <b>${j.elapsed_s}s</b></span>`,
+    `<span class="pill">Split <b>${Math.round(j.split_ms||0)} ms</b></span>`,
+    `<span class="pill">Stitch <b>${j.stitch_ms ? Math.round(j.stitch_ms)+' ms' : '-'}</b></span>`,
+    `<span class="pill">Tiles per worker <b>${pw}</b></span>`].join('');
+  if(j.error) $('dstats').innerHTML += `<div class="err">${j.error}</div>`;
+  const g = $('tgrid'); g.style.aspectRatio = j.width + ' / ' + j.height;
+  g.innerHTML = j.tiles.map(t => {
+    const st = `left:${100*t.x/j.width}%;top:${100*t.y/j.height}%;width:${100*t.w/j.width}%;height:${100*t.h/j.height}%;`;
+    return t.status === 'done'
+      ? `<div class="t" style="${st}background:${colorFor(t.worker_id)}" title="tile ${t.idx} by ${t.worker_id} (${t.proc_ms} ms)">#${t.idx} ${t.worker_id.replace('worker-','W')}</div>`
+      : `<div class="t q" style="${st}" title="tile ${t.idx} queued (partition ${t.partition_no})">#${t.idx} p${t.partition_no}</div>`;
+  }).join('');
+  const key = id + j.status;
+  if(shownImgsFor !== key){
+    shownImgsFor = key;
+    $('dimgs').innerHTML = `<div><div class="cap">Original</div><img src="/api/jobs/${id}/original"></div>` +
+      (j.status === 'done'
+        ? `<div><div class="cap">Processed &middot; <a class="dl" href="/api/jobs/${id}/result/download">download</a></div><img src="/api/jobs/${id}/result"></div>`
+        : `<div><div class="cap">Processed</div><div class="empty">Waiting for all tiles...</div></div>`);
+  }
+}
+refresh(); setInterval(refresh, 1000);
+</script>
+</body>
+</html>
